@@ -1,0 +1,94 @@
+import tensorflow as tf
+from tensorflow.keras.applications.inception_v3 import InceptionV3, preprocess_input
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.models import Model
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.layers import Input, LSTM, Embedding, Dense, Dropout
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import os
+
+print("TensorFlow version:", tf.__version__)
+
+def build_cnn_model():
+    model = InceptionV3(weights='imagenet')
+    model_new = Model(model.input, model.layers[-2].output)
+    return model_new
+
+def preprocess_image(img_path):
+    img = image.load_img(img_path, target_size=(299, 299))
+    x = image.img_to_array(img)
+    x = np.expand_dims(x, axis=0)
+    x = preprocess_input(x)
+    return x
+
+def encode_image(model, img_path):
+    img = preprocess_image(img_path)
+    feature_vector = model.predict(img)
+    feature_vector = np.reshape(feature_vector, feature_vector.shape[1])
+    return feature_vector
+
+vocab = ['startseq', 'a', 'man', 'riding', 'horse', 'on', 'beach', 'endseq']
+word_to_idx = {w: i for i, w in enumerate(vocab)}
+idx_to_word = {i: w for i, w in enumerate(vocab)}
+vocab_size = len(vocab)
+max_len = 10
+
+def build_caption_model(vocab_size, max_len):
+    inputs1 = Input(shape=(2048,))
+    fe1 = Dropout(0.5)(inputs1)
+    fe2 = Dense(256, activation='relu')(fe1)
+
+    inputs2 = Input(shape=(max_len,))
+    se1 = Embedding(vocab_size, 256, mask_zero=True)(inputs2)
+    se2 = Dropout(0.5)(se1)
+    se3 = LSTM(256)(se2)
+
+    decoder1 = tf.keras.layers.add([fe2, se3])
+    decoder2 = Dense(256, activation='relu')(decoder1)
+    outputs = Dense(vocab_size, activation='softmax')(decoder2)
+
+    model = tf.keras.models.Model(inputs=[inputs1, inputs2], outputs=outputs)
+    model.compile(loss='categorical_crossentropy', optimizer='adam')
+    return model
+
+def generate_caption(model, photo, max_len):
+    in_text = 'startseq'
+    for i in range(max_len):
+        sequence = [word_to_idx.get(w, 0) for w in in_text.split()]
+        sequence = pad_sequences([sequence], maxlen=max_len)
+
+        yhat = model.predict([np.array([photo]), sequence], verbose=0)
+        yhat = np.argmax(yhat)
+        word = idx_to_word.get(yhat, '')
+        in_text += ' ' + word
+        if word == 'endseq':
+            break
+    final_caption = in_text.split()[1:-1] 
+    return ' '.join(final_caption)
+
+if __name__ == '__main__':
+    image_path = "sample.jpg" 
+    if not os.path.exists(image_path):
+        print(f"Image file '{image_path}' not found. Please place it in the script folder.")
+
+    print("Loading InceptionV3 model...")
+    cnn_model = build_cnn_model()
+
+    print("Extracting image features...")
+    if os.path.exists(image_path):
+      photo_features = encode_image(cnn_model, image_path)
+
+      print("Building captioning model...")
+      caption_model = build_caption_model(vocab_size, max_len)
+      print("Generating caption...")
+      caption = generate_caption(caption_model, photo_features, max_len)
+      print("Generated Caption:", caption)
+      img = Image.open(image_path)
+      plt.imshow(img)
+      plt.axis('off')
+      plt.title("Caption: " + caption)
+      plt.show()
+    else:
+      print("Image not found, skipping feature extraction, caption generation and display.")
